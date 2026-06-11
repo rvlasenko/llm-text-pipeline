@@ -1,9 +1,0 @@
-{
-  "summary": "The user purchased a subscription and made a successful payment but is unable to access premium features.",
-  "key_points": [
-    "Subscription was bought yesterday.",
-    "Payment was successful and receipt received.",
-    "User cannot access premium features."
-  ],
-  "helpful_response": "Please try logging out and back in to your account. If the issue persists, contact customer support with your receipt details for further assistance."
-}

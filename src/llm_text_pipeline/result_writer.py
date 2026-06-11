@@ -1,10 +1,11 @@
 import json
 from pathlib import Path
-from typing import Any
+
+from llm_text_pipeline.schemas import TextAnalysisResult
 
 
 def save_json_result(
-    result: dict[str, Any],
+    result: TextAnalysisResult,
     output_path: Path,
 ) -> None:
     output_path.parent.mkdir(
@@ -14,7 +15,7 @@ def save_json_result(
 
     output_path.write_text(
         json.dumps(
-            result,
+            result.model_dump(),
             indent=2,
             ensure_ascii=False,
         ),

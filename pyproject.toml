@@ -1,0 +1,18 @@
+[project]
+name = "llm-text-pipeline"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "openai",
+    "python-dotenv",
+    "pydantic",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

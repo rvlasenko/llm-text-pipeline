@@ -2,9 +2,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from examples.sample_inputs import SAMPLE_INPUTS
-from src.llm_text_pipeline.llm_client import LLMClient
-from src.llm_text_pipeline.pipeline import process_text_summary
-from src.llm_text_pipeline.result_writer import save_json_result
+from llm_text_pipeline.llm_client import LLMClient
+from llm_text_pipeline.pipeline import process_text_summary
+from llm_text_pipeline.result_writer import save_json_result
 
 load_dotenv()
 
