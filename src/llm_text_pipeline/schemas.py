@@ -17,6 +17,21 @@ class Sentiment(StrEnum):
     NEUTRAL = "neutral"
 
 
+class ClassificationResult(BaseModel):
+    summary: str
+    category: TextCategory
+    sentiment: Sentiment
+
+    key_points: list[str] = Field(
+        min_length=3,
+        max_length=3,
+    )
+
+
+class GeneratedAnswer(BaseModel):
+    final_answer: str
+
+
 class TextAnalysisResult(BaseModel):
     summary: str
     category: TextCategory
@@ -28,3 +43,17 @@ class TextAnalysisResult(BaseModel):
     )
 
     final_answer: str
+
+    @classmethod
+    def from_parts(
+        cls,
+        classification: ClassificationResult,
+        answer: GeneratedAnswer,
+    ) -> "TextAnalysisResult":
+        return cls(
+            summary=classification.summary,
+            category=classification.category,
+            sentiment=classification.sentiment,
+            key_points=classification.key_points,
+            final_answer=answer.final_answer,
+        )

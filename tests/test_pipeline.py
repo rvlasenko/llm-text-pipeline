@@ -1,240 +1,141 @@
+import json
+
 import pytest
 from openai.types.chat import ChatCompletionMessageParam
 
+from llm_text_pipeline.pipeline import process_text_summary
+from llm_text_pipeline.routing import get_answer_style
 from llm_text_pipeline.schemas import (
     Sentiment,
     TextAnalysisResult,
     TextCategory,
 )
 
-from llm_text_pipeline.pipeline import process_text_summary
 
-
-class FakeLLMClient:
-    def __init__(self, response: str) -> None:
-        self.response = response
-        self.received_messages: list[ChatCompletionMessageParam] | None = None
+class ScriptedLLMClient:
+    def __init__(self, responses: list[str | Exception]) -> None:
+        self._responses = list(responses)
+        self.calls: list[list[ChatCompletionMessageParam]] = []
 
     def generate_completion(
         self,
         messages: list[ChatCompletionMessageParam],
     ) -> str:
-        self.received_messages = messages
-        return self.response
+        self.calls.append(messages)
+        if not self._responses:
+            raise AssertionError("unexpected extra LLM call")
+        response = self._responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
-def test_process_text_summary_returns_valid_result() -> None:
-    client = FakeLLMClient(
-        response="""
-{
-  "summary": "The user cannot access premium features after payment.",
-  "category": "support",
-  "sentiment": "negative",
-  "key_points": [
-    "The user bought a subscription.",
-    "The payment was successful.",
-    "Premium features are still unavailable."
-  ],
-  "final_answer": "Please check your account status and try logging in again. If the issue remains, contact support with your receipt."
-}
-"""
+def _classification_json(
+    category: str = "support",
+    sentiment: str = "negative",
+) -> str:
+    return json.dumps(
+        {
+            "summary": "The user cannot access premium features.",
+            "category": category,
+            "sentiment": sentiment,
+            "key_points": ["Bought subscription.", "Payment ok.", "No access."],
+        }
     )
 
-    result = process_text_summary(
-        text="I paid but cannot access premium features.",
-        client=client,
+
+def _generation_json(final_answer: str = "Please try logging in again.") -> str:
+    return json.dumps({"final_answer": final_answer})
+
+
+def _user_content(messages: list[ChatCompletionMessageParam]) -> str:
+    return next(m["content"] for m in messages if m["role"] == "user")
+
+
+def test_returns_combined_result() -> None:
+    client = ScriptedLLMClient(
+        [_classification_json(category="support"), _generation_json("Reset it.")]
     )
+
+    result = process_text_summary(text="I cannot log in.", client=client)
 
     assert isinstance(result, TextAnalysisResult)
     assert result.category is TextCategory.SUPPORT
     assert result.sentiment is Sentiment.NEGATIVE
+    assert result.final_answer == "Reset it."
     assert len(result.key_points) == 3
+    assert len(client.calls) == 2
 
 
-def test_process_text_summary_raises_for_invalid_json() -> None:
-    client = FakeLLMClient(response="This is not JSON.")
+def test_category_drives_generation_style() -> None:
+    client = ScriptedLLMClient(
+        [_classification_json(category="complaint"), _generation_json()]
+    )
+
+    process_text_summary(text="This is unacceptable.", client=client)
+
+    generation_messages = client.calls[1]
+    assert get_answer_style(TextCategory.COMPLAINT) in _user_content(generation_messages)
+
+
+def test_empty_input_is_rejected_before_any_llm_call() -> None:
+    client = ScriptedLLMClient([])
+
+    with pytest.raises(ValueError, match="must not be empty"):
+        process_text_summary(text="   \n  ", client=client)
+
+    assert client.calls == []
+
+
+def test_invalid_classification_json_raises() -> None:
+    client = ScriptedLLMClient(["this is not json"])
 
     with pytest.raises(ValueError, match="LLM returned invalid JSON"):
-        process_text_summary(
-            text="Hello",
-            client=client,
-        )
+        process_text_summary(text="Hello", client=client)
 
 
-def test_process_text_summary_raises_for_missing_required_field() -> None:
-    client = FakeLLMClient(
-        response="""
-{
-  "summary": "The user needs help.",
-  "category": "support",
-  "key_points": [
-    "Point one",
-    "Point two",
-    "Point three"
-  ],
-  "final_answer": "Please contact support."
-}
-"""
+def test_classification_missing_field_raises() -> None:
+    bad = json.dumps({"summary": "x", "category": "support", "key_points": ["a", "b", "c"]})
+    client = ScriptedLLMClient([bad])
+
+    with pytest.raises(ValueError, match="does not match schema"):
+        process_text_summary(text="Hello", client=client)
+
+
+def test_classification_invalid_category_raises() -> None:
+    client = ScriptedLLMClient([_classification_json(category="pricing")])
+
+    with pytest.raises(ValueError, match="does not match schema"):
+        process_text_summary(text="How much is it?", client=client)
+
+
+def test_stage_two_failure_propagates_and_writes_nothing() -> None:
+    client = ScriptedLLMClient(
+        [_classification_json(category="support"), RuntimeError("network down")]
     )
 
-    with pytest.raises(ValueError, match="LLM response does not match schema"):
-        process_text_summary(
-            text="I need help.",
-            client=client,
-        )
+    with pytest.raises(RuntimeError, match="network down"):
+        process_text_summary(text="I need help.", client=client)
 
 
-def test_process_text_summary_raises_for_wrong_key_points_type() -> None:
-    client = FakeLLMClient(
-        response="""
-{
-  "summary": "The user needs help.",
-  "category": "support",
-  "sentiment": "negative",
-  "key_points": "This should be a list.",
-  "final_answer": "Please contact support."
-}
-"""
+def test_stage_two_invalid_json_raises() -> None:
+    client = ScriptedLLMClient(
+        [_classification_json(category="support"), "not json either"]
     )
 
-    with pytest.raises(ValueError, match="LLM response does not match schema"):
-        process_text_summary(
-            text="I need help.",
-            client=client,
-        )
-
-
-def test_process_text_summary_raises_for_invalid_category() -> None:
-    client = FakeLLMClient(
-        response="""
-{
-  "summary": "The user asks about pricing.",
-  "category": "pricing",
-  "sentiment": "neutral",
-  "key_points": [
-    "The user asks about pricing.",
-    "The user wants plan details.",
-    "The user may be considering a purchase."
-  ],
-  "final_answer": "Please review the pricing page or contact sales."
-}
-"""
-    )
-
-    with pytest.raises(ValueError, match="LLM response does not match schema"):
-        process_text_summary(
-            text="How much does the pro plan cost?",
-            client=client,
-        )
+    with pytest.raises(ValueError, match="LLM returned invalid JSON"):
+        process_text_summary(text="I need help.", client=client)
 
 
 @pytest.mark.parametrize(
-    "key_points_json",
-    [
-        '["only", "two"]',
-        '["one", "two", "three", "four"]',
-        "[]",
-    ],
+    "category",
+    [c.value for c in TextCategory],
 )
-def test_process_text_summary_raises_for_wrong_key_points_count(
-    key_points_json: str,
-) -> None:
-    client = FakeLLMClient(
-        response=f"""
-{{
-  "summary": "The user needs help.",
-  "category": "support",
-  "sentiment": "negative",
-  "key_points": {key_points_json},
-  "final_answer": "Please contact support."
-}}
-"""
+def test_accepts_all_categories(category: str) -> None:
+    client = ScriptedLLMClient(
+        [_classification_json(category=category), _generation_json()]
     )
 
-    with pytest.raises(ValueError, match="LLM response does not match schema"):
-        process_text_summary(
-            text="I need help.",
-            client=client,
-        )
+    result = process_text_summary(text="Sample input", client=client)
 
-
-@pytest.mark.parametrize(
-    "response",
-    [
-        """
-{
-  "summary": "The user cannot access premium features after payment.",
-  "category": "support",
-  "sentiment": "negative",
-  "key_points": [
-    "The user bought a subscription.",
-    "Payment was successful.",
-    "Premium features are unavailable."
-  ],
-  "final_answer": "Please try logging in again and contact support if the issue remains."
-}
-""",
-        """
-{
-  "summary": "The user is unhappy with the latest product update.",
-  "category": "feedback",
-  "sentiment": "negative",
-  "key_points": [
-    "The user dislikes the update.",
-    "The experience feels worse.",
-    "The user shares product feedback."
-  ],
-  "final_answer": "Thank you for sharing your feedback. We will use it to improve the product experience."
-}
-""",
-        """
-{
-  "summary": "The user reports a billing issue and wants it resolved.",
-  "category": "complaint",
-  "sentiment": "negative",
-  "key_points": [
-    "The user was charged unexpectedly.",
-    "The user is dissatisfied.",
-    "The user wants the issue fixed."
-  ],
-  "final_answer": "I am sorry about the unexpected charge. Please contact billing support so the team can review and resolve it."
-}
-""",
-        """
-{
-  "summary": "The user asks about pricing and available plans.",
-  "category": "sales",
-  "sentiment": "neutral",
-  "key_points": [
-    "The user asks about pricing.",
-    "The user wants plan information.",
-    "The user may be considering a purchase."
-  ],
-  "final_answer": "You can compare available plans on the pricing page or contact sales for help choosing the right option."
-}
-""",
-        """
-{
-  "summary": "The user asks how password reset works.",
-  "category": "general_question",
-  "sentiment": "neutral",
-  "key_points": [
-    "The user asks about password reset.",
-    "The user wants an explanation.",
-    "No personal issue is reported."
-  ],
-  "final_answer": "You can reset your password using the forgot password link on the login page."
-}
-""",
-    ],
-)
-def test_process_text_summary_accepts_valid_responses(response: str) -> None:
-    client = FakeLLMClient(response=response)
-
-    result = process_text_summary(
-        text="Sample input",
-        client=client,
-    )
-
-    assert isinstance(result, TextAnalysisResult)
-    assert len(result.key_points) == 3
+    assert result.category.value == category

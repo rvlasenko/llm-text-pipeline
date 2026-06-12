@@ -12,9 +12,11 @@ load_dotenv()
 def main() -> None:
     client = LLMClient()
 
-    for index, text in enumerate(SAMPLE_INPUTS, start=1):
+    matches = 0
+
+    for index, sample in enumerate(SAMPLE_INPUTS, start=1):
         result = process_text_summary(
-            text=text,
+            text=sample.text,
             client=client,
         )
 
@@ -25,7 +27,16 @@ def main() -> None:
             output_path=output_path,
         )
 
-        print(f"Saved result to {output_path}")
+        is_match = result.category is sample.expected_category
+        matches += is_match
+        marker = "OK " if is_match else "MISS"
+
+        print(
+            f"[{marker}] expected={sample.expected_category.value:<16} "
+            f"predicted={result.category.value:<16} -> {output_path}"
+        )
+
+    print(f"\nCategory match: {matches}/{len(SAMPLE_INPUTS)}")
 
 
 if __name__ == "__main__":
