@@ -32,6 +32,64 @@ Environment variables (`.env`):
 The editable install (`-e .`) is what makes `llm_text_pipeline` importable; without
 it `python main.py` fails with `ModuleNotFoundError: No module named 'llm_text_pipeline'`.
 
+## Use it (CLI)
+
+After `uv pip install -e .` the `llm-pipeline` command is available. It takes one
+text and prints the full structured result as JSON.
+
+```bash
+llm-pipeline "I was charged twice and nobody answered my emails. I want a refund."
+llm-pipeline --file message.txt
+echo "How do I reset my password?" | llm-pipeline
+llm-pipeline "..." --output result.json   # also write the JSON to a file
+```
+
+Input comes from (in order of precedence): the positional argument, `--file`, or
+piped stdin. Exit codes: `0` success, `1` input or pipeline error (message on
+stderr), `2` invalid arguments. JSON goes to stdout, logs to stderr, so the output
+can be piped into tools like `jq`.
+
+### Example
+
+Input:
+
+> I was charged twice this month and nobody answered my emails for a whole week.
+> This is unacceptable and I want a refund.
+
+Output:
+
+```json
+{
+  "result": {
+    "summary": "The user was charged twice this month and did not receive any response to their emails for a week. They are requesting a refund due to this issue.",
+    "category": "complaint",
+    "sentiment": "negative",
+    "key_points": [
+      "Charged twice this month",
+      "No response to emails for a whole week",
+      "Requesting a refund"
+    ],
+    "final_answer": "I'm very sorry for the double charge and the delay in responding to your emails; I understand how frustrating this must be. I will escalate your case immediately to ensure a prompt refund and a thorough review of your billing issue."
+  },
+  "trace": {
+    "meaning": {
+      "core_intent": "The user wants a refund for being charged twice this month.",
+      "facts": [
+        "The user was charged twice this month.",
+        "Nobody answered the user's emails for a whole week."
+      ],
+      "implicit_need": "The user needs prompt customer support and resolution of the billing issue."
+    },
+    "self_check": {
+      "contradicts_input": false,
+      "missing_details": [],
+      "verdict": "pass",
+      "notes": "The answer addresses all key points from the original message appropriately."
+    }
+  }
+}
+```
+
 ## Run
 
 ```bash
@@ -44,7 +102,11 @@ plus a final match count.
 
 ## Test
 
+`pytest` lives in the `dev` dependency group, which the plain editable install does
+not pull in. Install it once, then run the suite:
+
 ```bash
+uv pip install -e . --group dev
 .venv/bin/python -m pytest
 ```
 
