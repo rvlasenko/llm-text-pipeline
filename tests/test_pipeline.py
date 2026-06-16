@@ -91,7 +91,9 @@ def _user_content(messages: list[ChatCompletionMessageParam]) -> str:
 
 
 def test_returns_pipeline_result_with_user_result_and_trace() -> None:
-    client = ScriptedLLMClient(_full_script(category="support", final_answer="Reset it."))
+    client = ScriptedLLMClient(
+        _full_script(category="support", final_answer="Reset it.")
+    )
 
     result = process_text(text="I cannot log in.", client=client)
 
@@ -191,20 +193,28 @@ def test_empty_input_is_rejected_before_any_llm_call() -> None:
     assert client.calls == []
 
 
-def test_meaning_invalid_json_raises() -> None:
-    client = ScriptedLLMClient(["this is not json"])
+def test_meaning_invalid_json_retries_then_raises() -> None:
+    client = ScriptedLLMClient(["this is not json", "still not json"])
 
-    with pytest.raises(ValueError, match="LLM returned invalid JSON"):
+    with pytest.raises(ValueError, match="failed after retry"):
         process_text(text="Hello", client=client)
 
+    assert len(client.calls) == 2
 
-def test_classification_invalid_category_raises() -> None:
+
+def test_classification_invalid_category_retries_then_raises() -> None:
     client = ScriptedLLMClient(
-        [_meaning_json(), _classification_json(category="pricing")]
+        [
+            _meaning_json(),
+            _classification_json(category="pricing"),
+            _classification_json(category="pricing"),
+        ]
     )
 
-    with pytest.raises(ValueError, match="does not match schema"):
+    with pytest.raises(ValueError, match="failed after retry"):
         process_text(text="How much is it?", client=client)
+
+    assert len(client.calls) == 3
 
 
 def test_generation_failure_propagates_and_aborts_before_self_check() -> None:
@@ -225,3 +235,79 @@ def test_accepts_all_categories(category: str) -> None:
     result = process_text(text="Sample input", client=client)
 
     assert result.result.category.value == category
+
+
+def test_step_recovers_on_retry() -> None:
+    client = ScriptedLLMClient(
+        [
+            "not json yet",
+            _meaning_json(),
+            _classification_json(),
+            _generation_json(),
+            _self_check_json(),
+        ]
+    )
+
+    result = process_text(text="I cannot log in.", client=client)
+
+    assert result.result.category is TextCategory.SUPPORT
+    assert len(client.calls) == 5
+
+
+def test_retry_appends_corrective_nudge() -> None:
+    client = ScriptedLLMClient(
+        [
+            "bad",
+            _meaning_json(),
+            _classification_json(),
+            _generation_json(),
+            _self_check_json(),
+        ]
+    )
+
+    process_text(text="hi", client=client)
+
+    assert len(client.calls[1]) == len(client.calls[0]) + 1
+    assert client.calls[1][-1]["role"] == "user"
+    assert "valid JSON" in client.calls[1][-1]["content"]
+
+
+def test_too_long_answer_is_rejected_then_retried() -> None:
+    long_answer = _generation_json(final_answer="x" * 700)
+    client = ScriptedLLMClient(
+        [_meaning_json(), _classification_json(), long_answer, long_answer]
+    )
+
+    with pytest.raises(ValueError, match="failed after retry"):
+        process_text(text="I need help.", client=client)
+
+
+def test_empty_response_retries_then_recovers() -> None:
+    client = ScriptedLLMClient(
+        [
+            ValueError("LLM returned empty message content"),
+            _meaning_json(),
+            _classification_json(),
+            _generation_json(),
+            _self_check_json(),
+        ]
+    )
+
+    result = process_text(text="I cannot log in.", client=client)
+
+    assert result.result.category is TextCategory.SUPPORT
+    assert len(client.calls) == 5
+
+
+def test_empty_response_failing_twice_raises() -> None:
+    client = ScriptedLLMClient(
+        [
+            ValueError("LLM returned empty message content"),
+            ValueError("LLM returned empty message content"),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="failed after retry"):
+        process_text(text="Hello", client=client)
+
+    assert len(client.calls) == 2

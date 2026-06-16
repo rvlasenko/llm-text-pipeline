@@ -1,6 +1,8 @@
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from typing import Annotated
+
+from pydantic import BaseModel, Field, StringConstraints
 
 
 class TextCategory(StrEnum):
@@ -24,6 +26,9 @@ class SelfCheckVerdict(StrEnum):
     UNKNOWN = "unknown"
 
 
+ShortText = Annotated[str, StringConstraints(max_length=200)]
+
+
 class MeaningResult(BaseModel):
     core_intent: str
     facts: list[str]
@@ -31,18 +36,18 @@ class MeaningResult(BaseModel):
 
 
 class ClassificationResult(BaseModel):
-    summary: str
+    summary: str = Field(max_length=400)
     category: TextCategory
     sentiment: Sentiment
 
-    key_points: list[str] = Field(
+    key_points: list[ShortText] = Field(
         min_length=3,
         max_length=3,
     )
 
 
 class GeneratedAnswer(BaseModel):
-    final_answer: str = Field(min_length=1)
+    final_answer: str = Field(min_length=1, max_length=600)
 
 
 class TextAnalysisResult(BaseModel):

@@ -15,13 +15,21 @@ logging.basicConfig(
     format="%(levelname)s %(name)s %(message)s",
 )
 
+logger = logging.getLogger(__name__)
+
 
 def main() -> None:
     client = LLMClient()
     matches = 0
+    failures = 0
 
     for index, sample in enumerate(SAMPLE_INPUTS, start=1):
-        result = process_text(text=sample.text, client=client)
+        try:
+            result = process_text(text=sample.text, client=client)
+        except Exception:
+            failures += 1
+            logger.exception("sample=%d failed, skipping", index)
+            continue
 
         output_path = Path(f"outputs/result_{index}.json")
         save_json_result(result=result, output_path=output_path)
@@ -39,7 +47,8 @@ def main() -> None:
             f"self_check={self_check.verdict.value:<7} -> {output_path}"
         )
 
-    print(f"\nCategory match: {matches}/{len(SAMPLE_INPUTS)}")
+    total = len(SAMPLE_INPUTS)
+    print(f"\nCategory match: {matches}/{total}  failed: {failures}/{total}")
 
 
 if __name__ == "__main__":

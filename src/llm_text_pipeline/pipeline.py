@@ -1,8 +1,11 @@
+from typing import TypeVar
+
+from openai.types.chat import ChatCompletionMessageParam
+from pydantic import BaseModel, ValidationError
+
 import json
 import logging
 from json import JSONDecodeError
-
-from pydantic import ValidationError
 
 from llm_text_pipeline.llm_client import CompletionClient
 from llm_text_pipeline.prompts import (
@@ -34,12 +37,38 @@ def _decode_json(raw_result: str) -> object:
         raise ValueError(f"LLM returned invalid JSON: {raw_result}") from error
 
 
+T = TypeVar("T", bound=BaseModel)
+
+_RETRY_NUDGE = "Your previous response was invalid and could not be parsed. Return only valid JSON matching the requested structure. No markdown, no prose."
+
+
+def _complete_structured(
+    client: CompletionClient,
+    messages: list[ChatCompletionMessageParam],
+    model: type[T],
+    step: str,
+) -> T:
+    attempts = [messages, [*messages, {"role": "user", "content": _RETRY_NUDGE}]]
+    last_error: Exception | None = None
+
+    for attempt, current in enumerate(attempts):
+        try:
+            raw_result = client.generate_completion(current)
+            return model.model_validate(_decode_json(raw_result))
+        except (ValueError, ValidationError) as error:
+            last_error = error
+            logger.warning("step=%s attempt=%d bad_output: %s", step, attempt, error)
+
+    raise ValueError(f"step={step} failed after retry: {last_error}") from last_error
+
+
 def _extract_meaning(text: str, client: CompletionClient) -> MeaningResult:
-    raw_result = client.generate_completion(build_meaning_messages(text))
-    try:
-        return MeaningResult.model_validate(_decode_json(raw_result))
-    except ValidationError as error:
-        raise ValueError(f"LLM response does not match schema: {error}") from error
+    return _complete_structured(
+        client,
+        build_meaning_messages(text),
+        MeaningResult,
+        "extract_meaning",
+    )
 
 
 def _classify(
@@ -47,13 +76,12 @@ def _classify(
     meaning: MeaningResult,
     client: CompletionClient,
 ) -> ClassificationResult:
-    raw_result = client.generate_completion(
-        build_classification_messages(text, meaning)
+    return _complete_structured(
+        client,
+        build_classification_messages(text, meaning),
+        ClassificationResult,
+        "classify",
     )
-    try:
-        return ClassificationResult.model_validate(_decode_json(raw_result))
-    except ValidationError as error:
-        raise ValueError(f"LLM response does not match schema: {error}") from error
 
 
 def _generate_answer(
@@ -69,11 +97,12 @@ def _generate_answer(
         style=style,
         meaning=meaning,
     )
-    raw_result = client.generate_completion(messages)
-    try:
-        return GeneratedAnswer.model_validate(_decode_json(raw_result))
-    except ValidationError as error:
-        raise ValueError(f"LLM response does not match schema: {error}") from error
+    return _complete_structured(
+        client,
+        messages,
+        GeneratedAnswer,
+        "generate",
+    )
 
 
 def _self_check(
@@ -98,7 +127,9 @@ def _self_check(
         raw_result = client.generate_completion(messages)
         judgement = SelfCheckJudgement.model_validate(_decode_json(raw_result))
     except (ValueError, ValidationError) as error:
-        logger.warning("step=self_check verdict=unknown reason=invalid_output: %s", error)
+        logger.warning(
+            "step=self_check verdict=unknown reason=invalid_output: %s", error
+        )
         return unknown_self_check(f"Self-check produced unusable output: {error}")
     except Exception as error:  # transient/infrastructure failure of the optional step
         logger.warning(
