@@ -1,11 +1,11 @@
 import json
 from pathlib import Path
 
-from llm_text_pipeline.schemas import TextAnalysisResult
+from pydantic import BaseModel
 
 
 def save_json_result(
-    result: TextAnalysisResult,
+    result: BaseModel,
     output_path: Path,
 ) -> None:
     output_path.parent.mkdir(
